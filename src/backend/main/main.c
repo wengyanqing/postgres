@@ -374,6 +374,12 @@ help(const char *progname)
 	printf(_("  -r FILENAME        send stdout and stderr to given file\n"));
 	printf(_("  -x NUM             internal use\n"));
 
+#ifdef CDB
+	printf(_("\nNode options:\n"));
+	printf(_("  --dispatcher       start as a Query Dispatcher\n"));
+	printf(_("  --executor         start as a Query Executor\n"));
+#endif
+
 	printf(_("\nPlease read the documentation for the complete list of run-time\n"
 	 "configuration settings and how to set them on the command line or in\n"
 			 "the configuration file.\n\n"

@@ -16021,6 +16021,8 @@ cat >>confdefs.h <<_ACEOF
 _ACEOF
 
 
+# For CDB extension, set both -DCDB by default. This can be overriden with -UCDB if the user sets it.
+CFLAGS="-DCDB $CFLAGS"
 
 
 # Begin output steps
