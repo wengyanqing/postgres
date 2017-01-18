@@ -3350,7 +3350,11 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 	 * postmaster/postmaster.c (the option sets should not conflict) and with
 	 * the common help() function in main/main.c.
 	 */
+#ifdef CDB
+	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:M:nOo:Pp:r:S:sTt:v:W:-:")) != -1)
+#else
 	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOo:Pp:r:S:sTt:v:W:-:")) != -1)
+#endif
 	{
 		switch (flag)
 		{
@@ -3415,6 +3419,12 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 			case 'l':
 				SetConfigOption("ssl", "true", ctx, gucsource);
 				break;
+
+#ifdef CDB
+			case 'M':
+				// TODO
+				break;
+#endif
 
 			case 'N':
 				SetConfigOption("max_connections", optarg, ctx, gucsource);

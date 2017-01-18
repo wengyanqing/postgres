@@ -110,6 +110,9 @@ static pid_t postmasterPID = -1;
 #define postmasterProcess shutdownHandles[1]
 #endif
 
+#ifdef CDB
+static char *cdbCommand = NULL;
+#endif
 
 static void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
 static void do_advice(void);
@@ -459,12 +462,23 @@ start_postmaster(void)
 	 * has the same PID as the current child process.
 	 */
 	if (log_file != NULL)
+#ifdef CDB
+		snprintf(cmd, MAXPGPATH, "exec \"%s\" %s %s%s < \"%s\" >> \"%s\" 2>&1",
+				 exec_path, cdbCommand, pgdata_opt, post_opts,
+				 DEVNULL, log_file);
+#else
 		snprintf(cmd, MAXPGPATH, "exec \"%s\" %s%s < \"%s\" >> \"%s\" 2>&1",
 				 exec_path, pgdata_opt, post_opts,
 				 DEVNULL, log_file);
+#endif
 	else
+#ifdef CDB
+		snprintf(cmd, MAXPGPATH, "exec \"%s\" %s %s%s < \"%s\" 2>&1",
+				 exec_path, cdbCommand, pgdata_opt, post_opts, DEVNULL);
+#else
 		snprintf(cmd, MAXPGPATH, "exec \"%s\" %s%s < \"%s\" 2>&1",
 				 exec_path, pgdata_opt, post_opts, DEVNULL);
+#endif
 
 	(void) execl("/bin/sh", "/bin/sh", "-c", cmd, (char *) NULL);
 
@@ -1908,9 +1922,15 @@ do_help(void)
 {
 	printf(_("%s is a utility to initialize, start, stop, or control a PostgreSQL server.\n\n"), progname);
 	printf(_("Usage:\n"));
+#ifdef CDB
+	printf(_("  %s init[db]               [-M NODE_TYPE] [-D DATADIR] [-s] [-o \"OPTIONS\"]\n"), progname);
+	printf(_("  %s start   [-w] [-t SECS] [-M NODE-TYPE] [-D DATADIR] [-s] [-l FILENAME] [-o \"OPTIONS\"]\n"), progname);
+	printf(_("  %s stop    [-W] [-t SECS] [-M NODE_TYPE] [-D DATADIR] [-s] [-m SHUTDOWN-MODE]\n"), progname);
+#else
 	printf(_("  %s init[db]               [-D DATADIR] [-s] [-o \"OPTIONS\"]\n"), progname);
 	printf(_("  %s start   [-w] [-t SECS] [-D DATADIR] [-s] [-l FILENAME] [-o \"OPTIONS\"]\n"), progname);
 	printf(_("  %s stop    [-W] [-t SECS] [-D DATADIR] [-s] [-m SHUTDOWN-MODE]\n"), progname);
+#endif
 	printf(_("  %s restart [-w] [-t SECS] [-D DATADIR] [-s] [-m SHUTDOWN-MODE]\n"
 			 "                 [-o \"OPTIONS\"]\n"), progname);
 	printf(_("  %s reload  [-D DATADIR] [-s]\n"), progname);
@@ -1933,6 +1953,9 @@ do_help(void)
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -w                     wait until operation completes\n"));
 	printf(_("  -W                     do not wait until operation completes\n"));
+#ifdef CDB
+	printf(_("  -M NODE-TYPE           can be \"master\", \"segment\", \"gtm\", \"catalogservice\"\n"));
+#endif
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("(The default is to wait for shutdown, but not for start or restart.)\n\n"));
 	printf(_("If the -D option is omitted, the environment variable PGDATA is used.\n"));
@@ -2196,7 +2219,11 @@ main(int argc, char **argv)
 	/* process command-line options */
 	while (optind < argc)
 	{
+#ifdef CDB
+		while ((c = getopt_long(argc, argv, "cD:e:l:mM:N:o:p:P:sS:t:U:wW", long_options, &option_index)) != -1)
+#else
 		while ((c = getopt_long(argc, argv, "cD:e:l:m:N:o:p:P:sS:t:U:wW", long_options, &option_index)) != -1)
+#endif
 		{
 			switch (c)
 			{
@@ -2227,6 +2254,17 @@ main(int argc, char **argv)
 				case 'm':
 					set_mode(optarg);
 					break;
+#ifdef CDB
+				case 'M':
+					if (strcmp(optarg, "master") == 0)
+						cdbCommand = strdup("-M master");
+					else if (strcmp(optarg, "segment") == 0)
+						cdbCommand = strdup("-M segment");
+					else if (strcmp(optarg, "gtm") == 0)
+						cdbCommand = strdup("-M gtm");
+					else if (strcmp(optarg, "catalogservice") == 0)
+						cdbCommand = strdup("-M catalogservice");
+#endif
 				case 'N':
 					register_servicename = pg_strdup(optarg);
 					break;

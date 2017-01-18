@@ -641,7 +641,11 @@ PostmasterMain(int argc, char *argv[])
 	 * tcop/postgres.c (the option sets should not conflict) and with the
 	 * common help() function in main/main.c.
 	 */
+#ifdef CDB
+	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:M:nOo:Pp:r:S:sTt:W:-:")) != -1)
+#else
 	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOo:Pp:r:S:sTt:W:-:")) != -1)
+#endif
 	{
 		switch (opt)
 		{
@@ -707,6 +711,11 @@ PostmasterMain(int argc, char *argv[])
 				SetConfigOption("ssl", "true", PGC_POSTMASTER, PGC_S_ARGV);
 				break;
 
+#ifdef CDB
+			case 'M':
+				// TODO
+				break;
+#endif
 			case 'N':
 				SetConfigOption("max_connections", optarg, PGC_POSTMASTER, PGC_S_ARGV);
 				break;
