@@ -1,0 +1,2 @@
+-- cdb catalog for initdb
+-- Please add them into schema cdb_catalog

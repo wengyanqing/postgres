@@ -4403,6 +4403,11 @@ else
   fi
 fi
 
+# #ifdef CDB
+# For CDB, set -DCDB by default. This can be overriden with -UCDB if the user sets it.
+CFLAGS="-DCDB $CFLAGS"
+# #endif
+
 # CFLAGS we determined above will be added back at the end
 user_CFLAGS=$CFLAGS
 CFLAGS=""

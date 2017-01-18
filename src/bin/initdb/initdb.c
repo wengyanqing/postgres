@@ -175,6 +175,14 @@ static int	n_connections = 10;
 static int	n_buffers = 50;
 static char *dynamic_shared_memory_type = NULL;
 
+#ifdef CDB
+static char *cdb_init_file;
+
+static char *nodename = NULL;
+static char *backend_output = DEVNULL;
+static int	n_fsm_pages = 204800;
+#endif
+
 /*
  * Warning messages for authentication methods
  */
@@ -196,7 +204,13 @@ static char *authwarning = NULL;
  * (no quoting to worry about).
  */
 static const char *boot_options = "-F";
-static const char *backend_options = "--single -F -O -j -c search_path=pg_catalog -c exit_on_error=true";
+static const char *backend_options = "--single -F -O -j "
+#ifdef CDB
+		"-c search_path=pg_catalog,cdb_catalog -c gp_session_role=utility -c gp_initdb_mirrored=%s" 
+#else 
+		"-c search_path=pg_catalog "
+#endif
+									"-c exit_on_error=true";
 
 static const char *const subdirs[] = {
 	"global",
@@ -221,6 +235,18 @@ static const char *const subdirs[] = {
 	"pg_logical",
 	"pg_logical/snapshots",
 	"pg_logical/mappings"
+#ifdef CDB
+	,
+	"pg_log",
+	"pg_changetracking",
+	"pg_distributedxidmap",		// Old directory.
+	"pg_distributedlog",		// New directory.
+	"pg_utilitymodedtmredo",
+	"pg_stat_tmp"
+	/* NOTE if you add to this list then please update other places (like management scripts) with this similar
+	 * (search for pg_multixact, for example) 
+	 */
+#endif
 };
 
 
@@ -1136,7 +1162,13 @@ test_config_settings(void)
 				 "< \"%s\" > \"%s\" 2>&1",
 				 backend_exec, boot_options,
 				 test_conns, test_buffs,
-				 DEVNULL, DEVNULL);
+				 DEVNULL, 
+#ifdef CDB
+				backend_output
+#else
+				DEVNULL
+#endif				 
+				 );
 		status = system(cmd);
 		if (status == 0)
 		{
@@ -1171,7 +1203,13 @@ test_config_settings(void)
 				 "< \"%s\" > \"%s\" 2>&1",
 				 backend_exec, boot_options,
 				 n_connections, test_buffs,
-				 DEVNULL, DEVNULL);
+				 DEVNULL, 
+#ifdef CDB
+				backend_output
+#else
+				DEVNULL
+#endif				 
+				 );
 		status = system(cmd);
 		if (status == 0)
 			break;
@@ -1270,7 +1308,13 @@ setup_config(void)
 	conflines = replace_token(conflines,
 						 "#default_text_search_config = 'pg_catalog.simple'",
 							  repltok);
-
+#ifdef CDB
+	/* Add Postgres node name to configuration file */
+	snprintf(repltok, sizeof(repltok),
+			 "pg_node_name = '%s'",
+			 escape_quotes(nodename));
+	conflines = replace_token(conflines, "#pg_node_name = ''", repltok);
+#endif
 	default_timezone = select_default_timezone(share_path);
 	if (default_timezone)
 	{
@@ -1399,6 +1443,13 @@ setup_config(void)
 			conflines = replace_token(conflines,
 							   "host    all             all             ::1",
 							 "#host    all             all             ::1");
+#ifdef CDB
+		if (err != 0 ||
+			getaddrinfo("fe80::1", NULL, &hints, &gai_result) != 0)
+			conflines = replace_token(conflines,
+									  "host    all         all         fe80::1",
+									  "#host    all         all         fe80::1");
+#endif
 	}
 #else							/* !HAVE_IPV6 */
 	/* If we didn't compile IPV6 support at all, always comment it out */
@@ -1424,6 +1475,12 @@ setup_config(void)
 							  "@default_username@",
 							  username);
 
+#ifdef CDB
+	/* Replace username for replication */
+	conflines = replace_token(conflines,
+							  "@default_username@",
+							  username);
+#endif
 	snprintf(path, sizeof(path), "%s/pg_hba.conf", pg_data);
 
 	writefile(path, conflines);
@@ -2052,6 +2109,9 @@ setup_privileges(FILE *cmdfd)
 		"  WHERE relkind IN ('r', 'v', 'm', 'S') AND relacl IS NULL;\n\n",
 		"GRANT USAGE ON SCHEMA pg_catalog TO PUBLIC;\n\n",
 		"GRANT CREATE, USAGE ON SCHEMA public TO PUBLIC;\n\n",
+#ifdef CDB
+		"GRANT USAGE ON SCHEMA cdb_catalog TO PUBLIC;\n",
+#endif
 		"REVOKE ALL ON pg_largeobject FROM PUBLIC;\n\n",
 		"INSERT INTO pg_init_privs "
 		"  (objoid, classoid, objsubid, initprivs, privtype)"
@@ -2660,6 +2720,77 @@ setlocales(void)
 #endif
 }
 
+#ifdef CDB
+/*
+ * Try to parse value as an integer.  The accepted formats are the
+ * usual decimal, octal, or hexadecimal formats.
+ */
+static long
+parse_long(const char *value, bool blckszUnit, const char* optname)
+{
+    long    val;
+    char   *endptr;
+    double  m;
+
+    errno = 0;
+    val = strtol(value, &endptr, 0);
+
+    if (errno ||
+        endptr == value)
+        goto err;
+
+    if (blckszUnit && endptr[0])
+    {
+        switch (endptr[0])
+        {
+            case 'k':
+            case 'K':
+                m = 1024;
+                break;
+
+            case 'm':
+            case 'M':
+                m = 1024*1024;
+                break;
+
+            case 'g':
+            case 'G':
+                m = 1024*1024*1024;
+                break;
+
+            default:
+                goto err;
+        }
+
+        if (endptr[1] != 'b' &&
+            endptr[1] != 'B')
+            goto err;
+
+        endptr += 2;
+        val = (long)(m * val / BLCKSZ);
+	}
+
+    /* error if extra trailing chars */
+    if (endptr[0])
+        goto err;
+
+    return val;
+
+err:
+    if (blckszUnit)
+        fprintf(stderr, _("%s: '%s=%s' invalid; requires an integer value, "
+                          "optionally followed by kB/MB/GB suffix\n"),
+                progname, optname, value);
+    else
+        fprintf(stderr, _("%s: '%s=%s' invalid; requires an integer value\n"),
+                progname, optname, value);
+    exit_nicely();
+    return 0;                   /* not reached */
+}                               /* parse_long */
+
+
+#endif
+
 /*
  * print help text
  */
@@ -2697,6 +2828,17 @@ usage(const char *progname)
 	printf(_("  -S, --sync-only           only sync data directory\n"));
 	printf(_("\nOther options:\n"));
 	printf(_("  -V, --version             output version information, then exit\n"));
+#ifdef CDB
+	printf(_("  --gp-version             output Greenplum version information, then exit\n"));
+	printf(_("\nShared memory allocation:\n"));
+	printf(_("  --nodename=NODENAME   name of Postgres node initialized\n"));
+	printf(_("  --max_connections=MAX-CONNECT  maximum number of allowed connections\n"));
+	printf(_("  --shared_buffers=NBUFFERS number of shared buffers; or, amount of memory for\n"
+			 "                            shared buffers if kB/MB/GB suffix is appended\n"));
+	printf(_("  --max_fsm_pages=MAX-FSM   number of disk pages for which free space is tracked\n"));
+	printf(_("  --is_filerep_mirrored=yes|no whether or not this db directory will be mirrored by file replication\n"));
+	printf(_("  -m, --formirror           only create data needed to start the backend in mirror mode\n"));
+#endif
 	printf(_("  -?, --help                show this help, then exit\n"));
 	printf(_("\nIf the data directory is not specified, the environment variable PGDATA\n"
 			 "is used.\n"));
@@ -2945,6 +3087,9 @@ setup_data_file_paths(void)
 	set_input(&info_schema_file, "information_schema.sql");
 	set_input(&features_file, "sql_features.txt");
 	set_input(&system_views_file, "system_views.sql");
+#ifdef CDB
+	set_input(&cdb_init_file, "cdb_init.sql");
+#endif
 
 	if (show_setting || debug)
 	{
@@ -2975,6 +3120,9 @@ setup_data_file_paths(void)
 	check_input(dictionary_file);
 	check_input(info_schema_file);
 	check_input(features_file);
+#ifdef CDB
+	check_input(cdb_init_file);
+#endif
 	check_input(system_views_file);
 }
 
@@ -3306,7 +3454,12 @@ initialize_data_directory(void)
 	snprintf(cmd, sizeof(cmd),
 			 "\"%s\" %s template1 >%s",
 			 backend_exec, backend_options,
-			 DEVNULL);
+#ifdef CDB
+			backend_output
+#else
+			DEVNULL
+#endif
+			 );
 
 	PG_CMD_OPEN;
 
@@ -3372,6 +3525,13 @@ main(int argc, char *argv[])
 		{"sync-only", no_argument, NULL, 'S'},
 		{"xlogdir", required_argument, NULL, 'X'},
 		{"data-checksums", no_argument, NULL, 'k'},
+#ifdef CDB
+		{"max_connections", required_argument, NULL, 1001},
+		{"max_fsm_pages", required_argument, NULL, 1002},
+		{"shared_buffers", required_argument, NULL, 1003},
+		{"backend_output", optional_argument, NULL, 1005},
+		{"nodename", required_argument, NULL, 1006},
+#endif
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3414,6 +3574,26 @@ main(int argc, char *argv[])
 
 	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:", long_options, &option_index)) != -1)
 	{
+#ifdef CDB
+		const char *optname;
+		char        shortopt[2];
+
+		/* CDB: Get option name for error reporting.  On Solaris, getopt_long
+			* may leave garbage in option_index after parsing a short option, so
+			* check carefully.
+			*/
+		if (isalpha(c))
+		{
+			shortopt[0] = (char)c;
+			shortopt[1] = '\0';
+			optname = shortopt;
+		}
+		else if (option_index >= 0 &&
+					option_index < sizeof(long_options)/sizeof(long_options[0]) - 1)
+			optname = long_options[option_index].name;
+		else
+			optname = "?!?";
+#endif
 		switch (c)
 		{
 			case 'A':
@@ -3503,6 +3683,23 @@ main(int argc, char *argv[])
 			case 'X':
 				xlog_dir = pg_strdup(optarg);
 				break;
+#ifdef CDB
+			case 1001:
+				n_connections = parse_long(optarg, false, optname);
+				break;
+			case 1002:
+				n_fsm_pages = parse_long(optarg, false, optname);
+				break;
+			case 1003:
+				n_buffers = parse_long(optarg, true, optname);
+				break;
+			case 1005:
+				backend_output = pg_strdup(optarg);
+				break;
+			case 1006:
+				nodename = pg_strdup(optarg);
+				break;
+#endif
 			default:
 				/* getopt_long already emitted a complaint */
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
@@ -3618,7 +3815,13 @@ main(int argc, char *argv[])
 	get_parent_directory(bin_dir);
 
 	printf(_("\nSuccess. You can now start the database server using:\n\n"
-			 "    %s%s%spg_ctl%s -D %s%s%s -l logfile start\n\n"),
+#ifdef CDB
+			 "    %s%s%spg_ctl%s start -D %s%s%s -l logfile \n\n"
+			 " with different types: -M master | segment | GTM "
+#else
+			 "    %s%s%spg_ctl%s -D %s%s%s -l logfile start\n\n"
+#endif
+			 ),
 	   QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
 		   QUOTE_PATH, pgdata_native, QUOTE_PATH);
 
