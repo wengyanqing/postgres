@@ -178,7 +178,6 @@ static char *dynamic_shared_memory_type = NULL;
 #ifdef CDB
 static char *cdb_init_file;
 
-static char *nodename = NULL;
 static char *backend_output = DEVNULL;
 static int	n_fsm_pages = 204800;
 #endif
@@ -206,7 +205,8 @@ static char *authwarning = NULL;
 static const char *boot_options = "-F";
 static const char *backend_options = "--single -F -O -j "
 #ifdef CDB
-		"-c search_path=pg_catalog,cdb_catalog -c gp_session_role=utility -c gp_initdb_mirrored=%s" 
+		//"-c search_path=pg_catalog,cdb_catalog -c gp_session_role=utility -c gp_initdb_mirrored=%s" 
+		"-c search_path=pg_catalog,cdb_catalog " 
 #else 
 		"-c search_path=pg_catalog "
 #endif
@@ -242,7 +242,6 @@ static const char *const subdirs[] = {
 	"pg_distributedxidmap",		// Old directory.
 	"pg_distributedlog",		// New directory.
 	"pg_utilitymodedtmredo",
-	"pg_stat_tmp"
 	/* NOTE if you add to this list then please update other places (like management scripts) with this similar
 	 * (search for pg_multixact, for example) 
 	 */
@@ -1308,13 +1307,6 @@ setup_config(void)
 	conflines = replace_token(conflines,
 						 "#default_text_search_config = 'pg_catalog.simple'",
 							  repltok);
-#ifdef CDB
-	/* Add Postgres node name to configuration file */
-	snprintf(repltok, sizeof(repltok),
-			 "pg_node_name = '%s'",
-			 escape_quotes(nodename));
-	conflines = replace_token(conflines, "#pg_node_name = ''", repltok);
-#endif
 	default_timezone = select_default_timezone(share_path);
 	if (default_timezone)
 	{
@@ -2831,7 +2823,6 @@ usage(const char *progname)
 #ifdef CDB
 	printf(_("  --gp-version             output Greenplum version information, then exit\n"));
 	printf(_("\nShared memory allocation:\n"));
-	printf(_("  --nodename=NODENAME   name of Postgres node initialized\n"));
 	printf(_("  --max_connections=MAX-CONNECT  maximum number of allowed connections\n"));
 	printf(_("  --shared_buffers=NBUFFERS number of shared buffers; or, amount of memory for\n"
 			 "                            shared buffers if kB/MB/GB suffix is appended\n"));
@@ -3530,7 +3521,6 @@ main(int argc, char *argv[])
 		{"max_fsm_pages", required_argument, NULL, 1002},
 		{"shared_buffers", required_argument, NULL, 1003},
 		{"backend_output", optional_argument, NULL, 1005},
-		{"nodename", required_argument, NULL, 1006},
 #endif
 		{NULL, 0, NULL, 0}
 	};
@@ -3696,9 +3686,6 @@ main(int argc, char *argv[])
 			case 1005:
 				backend_output = pg_strdup(optarg);
 				break;
-			case 1006:
-				nodename = pg_strdup(optarg);
-				break;
 #endif
 			default:
 				/* getopt_long already emitted a complaint */
@@ -3814,16 +3801,30 @@ main(int argc, char *argv[])
 	strlcpy(bin_dir, argv[0], sizeof(bin_dir));
 	get_parent_directory(bin_dir);
 
-	printf(_("\nSuccess. You can now start the database server using:\n\n"
 #ifdef CDB
-			 "    %s%s%spg_ctl%s start -D %s%s%s -l logfile \n\n"
-			 " with different types: -M master | segment | GTM "
+	printf(_("\nSuccess.\n"));
+	printf(_("You can now start the database server of the master using:\n\n"
+				"    %s%s%spostgres%s -M master -D %s%s%s\n"
+				"or\n"
+				"    %s%s%spg_ctl%s start -D %s%s%s -M master -l logfile\n\n"
+				" You can now start the database server of the segment using:\n\n"
+				"    %s%s%spostgres%s -M segment -D %s%s%s\n"
+				"or \n"
+				"    %s%s%spg_ctl%s start -D %s%s%s -M segment -l logfile\n\n"),
+			QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
+			QUOTE_PATH, pgdata_native, QUOTE_PATH,
+			QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
+			QUOTE_PATH, pgdata_native, QUOTE_PATH,
+			QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
+			QUOTE_PATH, pgdata_native, QUOTE_PATH,
+			QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
+			QUOTE_PATH, pgdata_native, QUOTE_PATH);
 #else
-			 "    %s%s%spg_ctl%s -D %s%s%s -l logfile start\n\n"
-#endif
-			 ),
+	printf(_("\nSuccess. You can now start the database server using:\n\n"
+			 "    %s%s%spg_ctl%s -D %s%s%s -l logfile start\n\n"),
 	   QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
 		   QUOTE_PATH, pgdata_native, QUOTE_PATH);
+#endif
 
 	return 0;
 }

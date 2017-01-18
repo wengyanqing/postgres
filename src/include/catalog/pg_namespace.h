@@ -75,7 +75,11 @@ DESCR("reserved schema for TOAST tables");
 DATA(insert OID = 2200 ( "public" PGUID _null_ ));
 DESCR("standard public schema");
 #define PG_PUBLIC_NAMESPACE 2200
-
+#ifdef XCP
+DATA(insert OID = 9 ( "cdb_catalog" PGUID _null_ ));
+DESCR("cdb catalog schema");
+#define CDB_CATALOG_NAMESPACE 9
+#endif
 
 /*
  * prototypes for functions in pg_namespace.c
