@@ -131,6 +131,9 @@
 #include "storage/spin.h"
 #endif
 
+#ifdef CDB
+#include "cdb/identity.h"
+#endif
 
 /*
  * Possible types of a backend. Beyond being the possible bkend_type values in
@@ -713,7 +716,7 @@ PostmasterMain(int argc, char *argv[])
 
 #ifdef CDB
 			case 'M':
-				// TODO
+				SetCdbNodeIdentity(optarg);
 				break;
 #endif
 			case 'N':
