@@ -44,6 +44,9 @@
 #include "utils/rel.h"
 #include "utils/tqual.h"
 
+#ifdef CDB
+#include "catalog/gp_segment_config.h"
+#endif
 
 /*
  * IsSystemRelation
@@ -227,6 +230,9 @@ IsSharedRelation(Oid relationId)
 		relationId == SharedSecLabelRelationId ||
 		relationId == TableSpaceRelationId ||
 		relationId == DbRoleSettingRelationId ||
+#ifdef CDB
+		relationId == GpSegmentConfigRelationId ||
+#endif
 		relationId == ReplicationOriginRelationId)
 		return true;
 	/* These are their indexes (see indexing.h) */
