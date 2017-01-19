@@ -79,7 +79,7 @@ typedef struct SegmentIdentity
 	ProcessIdentity		pid;
 } SegmentIdentity;
 
-static SegmentIdentity SegmentId;
+static SegmentIdentity SegmentId = { SEGMENT_ROLE_INVALID };
 
 static void DebugSegmentIdentity(struct SegmentIdentity *id);
 static void DebugProcessIdentity(struct ProcessIdentity *id);
