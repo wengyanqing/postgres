@@ -716,7 +716,7 @@ PostmasterMain(int argc, char *argv[])
 
 #ifdef CDB
 			case 'M':
-				SetCdbNodeIdentity(optarg);
+				SetSegmentIdentity(optarg);
 				break;
 #endif
 			case 'N':
