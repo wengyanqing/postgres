@@ -111,7 +111,7 @@ static pid_t postmasterPID = -1;
 #endif
 
 #ifdef CDB
-static char *cdbCommand = NULL;
+static char cdbCommand[10240] = {'\0'};
 #endif
 
 static void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
@@ -1924,8 +1924,8 @@ do_help(void)
 	printf(_("Usage:\n"));
 #ifdef CDB
 	printf(_("  %s init[db]               [-M NODE_TYPE] [-D DATADIR] [-s] [-o \"OPTIONS\"]\n"), progname);
-	printf(_("  %s start   [-w] [-t SECS] [-M NODE-TYPE] [-D DATADIR] [-s] [-l FILENAME] [-o \"OPTIONS\"]\n"), progname);
-	printf(_("  %s stop    [-W] [-t SECS] [-M NODE_TYPE] [-D DATADIR] [-s] [-m SHUTDOWN-MODE]\n"), progname);
+	printf(_("  %s start   [-w] [-t SECS] [-M NODE-TYPE] [-D DATADIR] [-C CATALOGSERVICE-ADDRESS] [-s] [-l FILENAME] [-o \"OPTIONS\"]\n"), progname);
+	printf(_("  %s stop    [-W] [-t SECS] [-M NODE_TYPE] [-D DATADIR] [-C CATALOGSERVICE-ADDRESS] [-s] [-m SHUTDOWN-MODE]\n"), progname);
 #else
 	printf(_("  %s init[db]               [-D DATADIR] [-s] [-o \"OPTIONS\"]\n"), progname);
 	printf(_("  %s start   [-w] [-t SECS] [-D DATADIR] [-s] [-l FILENAME] [-o \"OPTIONS\"]\n"), progname);
@@ -1955,6 +1955,7 @@ do_help(void)
 	printf(_("  -W                     do not wait until operation completes\n"));
 #ifdef CDB
 	printf(_("  -M NODE-TYPE           can be \"master\", \"segment\", \"gtm\", \"catalogservice\"\n"));
+	printf(_("  -C CATALOGSERVICE-ADDRESS catalog service address, format: postgresql://ip:port/db\"\n"));
 #endif
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("(The default is to wait for shutdown, but not for start or restart.)\n\n"));
@@ -2220,11 +2221,12 @@ main(int argc, char **argv)
 	while (optind < argc)
 	{
 #ifdef CDB
-		while ((c = getopt_long(argc, argv, "cD:e:l:mM:N:o:p:P:sS:t:U:wW", long_options, &option_index)) != -1)
+		while ((c = getopt_long(argc, argv, "cD:e:l:mM:N:o:p:P:sS:t:U:wW:Z:-", long_options, &option_index)) != -1)
 #else
 		while ((c = getopt_long(argc, argv, "cD:e:l:m:N:o:p:P:sS:t:U:wW", long_options, &option_index)) != -1)
 #endif
 		{
+			printf("%s\n", optarg);
 			switch (c)
 			{
 				case 'D':
@@ -2257,13 +2259,16 @@ main(int argc, char **argv)
 #ifdef CDB
 				case 'M':
 					if (strcmp(optarg, "master") == 0)
-						cdbCommand = strdup("-M master");
+						sprintf(cdbCommand, "%s %s", cdbCommand, "-M master");
 					else if (strcmp(optarg, "segment") == 0)
-						cdbCommand = strdup("-M segment");
+						sprintf(cdbCommand, "%s %s", cdbCommand, "-M segment");
 					else if (strcmp(optarg, "gtm") == 0)
-						cdbCommand = strdup("-M gtm");
+						sprintf(cdbCommand, "%s %s", cdbCommand, "-M gtm");
 					else if (strcmp(optarg, "catalogservice") == 0)
-						cdbCommand = strdup("-M catalogservice");
+						sprintf(cdbCommand, "%s %s", cdbCommand, "-M catalogservice");
+					printf("%s\n", cdbCommand);
+					break;
+
 #endif
 				case 'N':
 					register_servicename = pg_strdup(optarg);
@@ -2317,9 +2322,18 @@ main(int argc, char **argv)
 					do_wait = false;
 					wait_set = true;
 					break;
+
 				case 'c':
 					allow_core_files = true;
 					break;
+	
+#ifdef CDB
+				case 'Z':
+					sprintf(cdbCommand, "%s -Z %s", cdbCommand, optarg);
+					printf("%s\n", cdbCommand);
+					break;
+#endif
+			
 				default:
 					/* getopt_long already issued a suitable error message */
 					do_advice();

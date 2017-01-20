@@ -645,7 +645,7 @@ PostmasterMain(int argc, char *argv[])
 	 * common help() function in main/main.c.
 	 */
 #ifdef CDB
-	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:M:nOo:Pp:r:S:sTt:W:-:")) != -1)
+	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:M:nOo:Pp:r:S:sTt:W:Z:-:")) != -1)
 #else
 	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOo:Pp:r:S:sTt:W:-:")) != -1)
 #endif
@@ -717,6 +717,10 @@ PostmasterMain(int argc, char *argv[])
 #ifdef CDB
 			case 'M':
 				SetSegmentIdentity(optarg);
+				break;
+
+			case 'Z':
+				// TODO
 				break;
 #endif
 			case 'N':

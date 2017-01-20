@@ -3351,7 +3351,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 	 * the common help() function in main/main.c.
 	 */
 #ifdef CDB
-	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:M:nOo:Pp:r:S:sTt:v:W:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:M:nOo:Pp:r:S:sTt:v:W:Z:-:")) != -1)
 #else
 	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOo:Pp:r:S:sTt:v:W:-:")) != -1)
 #endif
@@ -3422,6 +3422,10 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 
 #ifdef CDB
 			case 'M':
+				// TODO
+				break;
+
+			case 'Z':
 				// TODO
 				break;
 #endif
