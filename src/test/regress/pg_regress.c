@@ -35,6 +35,28 @@
 #include "libpq/pqcomm.h"		/* needed for UNIXSOCK_PATH() */
 #include "pg_config_paths.h"
 
+#ifdef CDB
+/*
+ * In CDB, a regression test check is run on 2 masters, 4 segments, 1 GTM
+ * and 1 catalog service node. Master 1 is considered as being the default
+ * used in pg_regress.
+ * External connections are made to master 1.
+ * All connections to remote nodes are made from master 1.
+ * Here is the list of nodes identified with a unique ID.
+ */
+typedef enum
+{
+	CDB_MASTER_1,
+	CDB_MASTER_2,
+	CDB_SEGMENT_1,
+	CDB_SEGMENT_2,
+	CDB_SEGMENT_3,
+	CDB_SEGMENT_4,
+	CDB_GTM,
+	CDB_CATALOG_SERVICE
+} CDBNodeTypeNum;
+#endif
+
 /* for resultmap we need a list of pairs of strings */
 typedef struct _resultmap
 {
@@ -91,6 +113,33 @@ static char *user = NULL;
 static _stringlist *extraroles = NULL;
 static char *config_auth_datadir = NULL;
 
+#ifdef CDB
+/*
+ * Additional port numbers for Master 2, Segment[1,4], GTM, CatalogService
+ * Ports are chosen up to the default value which is 5432.
+ */
+static int	port_master2 = -1;
+static int	port_segment1 = -1;
+static int	port_segment2 = -1;
+static int	port_segment3 = -1;
+static int	port_segment4 = -1;
+static int	port_gtm = -1;
+static int	port_catlog_service = -1;
+
+/* Data directory of each node */
+const char *masterdd1 = "masterdd1"; /* master 1 */
+const char *masterdd2 = "masterdd2"; /* master 2 */
+const char *segmentdd1 = "segmentdd1"; /* segment 1 */
+const char *segmentdd2 = "segmentdd2"; /* segment 2 */
+const char *segmentdd3 = "segmentdd3"; /* segment 3 */
+const char *segmentdd4 = "segmentdd4"; /* segment 4 */
+const char *gtmdd = "gtmdd"; /* GTM */
+const char *catservicedd = "catservicedd"; /* catalog service */
+
+/* 7 port numbers are needed */
+#define PORT_NUM_INTERVAL 7
+#endif
+
 /* internal variables */
 static const char *progname;
 static char *logfilename;
@@ -105,7 +154,19 @@ static char socklock[MAXPGPATH];
 
 static _resultmap *resultmap = NULL;
 
+#ifdef CDB
+/* Additional PIDs for CDB temporary nodes */
+static PID_TYPE master1_pid = INVALID_PID;
+static PID_TYPE master2_pid = INVALID_PID;
+static PID_TYPE segment1_pid = INVALID_PID;
+static PID_TYPE segment2_pid = INVALID_PID;
+static PID_TYPE segment3_pid = INVALID_PID;
+static PID_TYPE segment4_pid = INVALID_PID;
+static PID_TYPE gtm_pid = INVALID_PID;
+static PID_TYPE catservice_pid = INVALID_PID;
+#else
 static PID_TYPE postmaster_pid = INVALID_PID;
+#endif
 static bool postmaster_running = false;
 
 static int	success_count = 0;
@@ -114,6 +175,17 @@ static int	fail_ignore_count = 0;
 
 static bool directory_exists(const char *dir);
 static void make_directory(const char *dir);
+
+#ifdef CDB
+static void
+doputenv(const char *var, const char *val);
+
+static void
+psql_command_node(const char *database, CDBNodeTypeNum node, const char *query,...)
+/* This extension allows gcc to check the format string for consistency with
+   the supplied arguments. */
+__attribute__((format(PG_PRINTF_ATTRIBUTE, 3, 4)));
+#endif
 
 static void header(const char *fmt,...) pg_attribute_printf(1, 2);
 static void status(const char *fmt,...) pg_attribute_printf(1, 2);
@@ -248,6 +320,119 @@ status_end(void)
 		fprintf(logfile, "\n");
 }
 
+#ifdef CDB
+/*
+ * Find data folder associated to node
+ */
+static
+const char *
+find_data_folder(CDBNodeTypeNum node)
+{
+	const char *data_folder;
+
+	switch (node)
+	{
+		case CDB_MASTER_1:
+			data_folder = masterdd1;
+			break;
+		case CDB_MASTER_2:
+			data_folder = masterdd2;
+			break;
+		case CDB_SEGMENT_1:
+			data_folder = segmentdd1;
+			break;
+		case CDB_SEGMENT_2:
+			data_folder = segmentdd2;
+			break;
+		case CDB_SEGMENT_3:
+			data_folder = segmentdd3;
+			break;
+		case CDB_SEGMENT_4:
+			data_folder = segmentdd4;
+			break;
+		case CDB_GTM:
+			data_folder = gtmdd;
+			break;
+		case CDB_CATALOG_SERVICE:
+			data_folder = catservicedd;
+			break;
+		default:
+			/* Should not happen */
+			data_folder = NULL;
+			break;
+	}
+
+	return data_folder;
+}
+static
+const char *
+get_node_type(CDBNodeTypeNum node)
+{
+	const char *data_folder;
+
+	switch (node)
+	{
+		case CDB_MASTER_1:
+			return "master";
+			break;
+		case CDB_MASTER_2:
+			return "master";
+			break;
+		case CDB_SEGMENT_1:
+			return "segment";
+			break;
+		case CDB_SEGMENT_2:
+			return "segment";
+			break;
+		case CDB_SEGMENT_3:
+			return "segment";
+			break;
+		case CDB_SEGMENT_4:
+			return "segment";
+			break;
+		case CDB_GTM:
+			return "gtm";
+			break;
+		case CDB_CATALOG_SERVICE:
+			return "catalogservice";
+			break;
+		default:
+			/* Should not happen */
+			data_folder = "NULL";
+			break;
+	}
+
+	return "NULL";
+}
+/*
+ * Stop the given node
+ */
+static void
+stop_node(CDBNodeTypeNum node)
+{
+	const char *data_folder = find_data_folder(node);
+	char		buf[MAXPGPATH * 2];
+	int			r;
+
+	/* On Windows, system() seems not to force fflush, so... */
+	fflush(stdout);
+	fflush(stderr);
+
+	snprintf(buf, sizeof(buf),
+			 "\"%s%spg_ctl\" stop -D \"%s/%s\" -s -m fast",
+			 bindir ? bindir : "",
+			 bindir ? "/" : "",
+			 temp_instance, data_folder);
+	r = system(buf);
+	if (r != 0)
+	{
+		fprintf(stderr, _("\n%s: could not stop node %d: exit code was %d\n"),
+				progname, node, r);
+		exit(2);
+	}
+}
+#endif
+
 /*
  * shut down temp postmaster
  */
@@ -256,6 +441,25 @@ stop_postmaster(void)
 {
 	if (postmaster_running)
 	{
+#ifdef CDB
+		/*
+		 * It is necessary to stop first the Coordinator 1,
+		 * Then other nodes are stopped nicely.
+		 * This is due to connection dependencies between nodes.
+		 */
+		stop_node(CDB_SEGMENT_1);
+		stop_node(CDB_SEGMENT_2);
+		stop_node(CDB_SEGMENT_3);
+		stop_node(CDB_SEGMENT_4);
+
+		stop_node(CDB_MASTER_2);
+		stop_node(CDB_MASTER_1);
+		
+		stop_node(CDB_CATALOG_SERVICE);
+
+		/* Stop GTM at the end */
+		stop_node(CDB_GTM);
+#else
 		/* We use pg_ctl to issue the kill and wait for stop */
 		char		buf[MAXPGPATH * 2];
 		int			r;
@@ -276,10 +480,498 @@ stop_postmaster(void)
 					progname, r);
 			_exit(2);			/* not exit(), that could be recursive */
 		}
-
+#endif
 		postmaster_running = false;
 	}
 }
+
+#ifdef CDB
+/*
+ * Get node port of associated node
+ */
+static int
+get_port_number(CDBNodeTypeNum node)
+{
+	switch (node)
+	{
+		case CDB_MASTER_1:
+			return port;
+		case CDB_MASTER_2:
+			return port_master2;
+		case CDB_SEGMENT_1:
+			return port_segment1;
+		case CDB_SEGMENT_2:
+			return port_segment2;
+		case CDB_SEGMENT_3:
+			return port_segment3;
+		case CDB_SEGMENT_4:
+			return port_segment4;
+		case CDB_GTM:
+			return port_gtm;
+		case CDB_CATALOG_SERVICE:
+			return port_catlog_service;
+		default:
+			/* Should not happen */
+			return -1;
+	}
+}
+
+/*
+ * Set port number for given node
+ */
+static void
+set_port_number(CDBNodeTypeNum node, int port_number)
+{
+	switch (node)
+	{
+		case CDB_MASTER_1:
+			port = port_number;
+			break;
+		case CDB_MASTER_2:
+			port_master2 = port_number;
+			break;
+		case CDB_SEGMENT_1:
+			port_segment1 = port_number;
+			break;
+		case CDB_SEGMENT_2:
+			port_segment2 = port_number;
+			break;
+		case CDB_SEGMENT_3:
+			port_segment3 = port_number;
+			break;
+		case CDB_SEGMENT_4:
+			port_segment4 = port_number;
+			break;
+		case CDB_GTM:
+			port_gtm = port_number;
+			break;
+		case CDB_CATALOG_SERVICE:
+			port_catlog_service = port_number;
+			break;
+		default:
+			/* Should not happen */
+			break;
+	}
+}
+
+/*
+ * Calculate port number for given node.
+ * If node is main access point, set also environment variable PGPORT.
+ */
+static void
+calculate_node_port(CDBNodeTypeNum node, bool is_main)
+{
+	int			port_number, i;
+	char		buf[MAXPGPATH * 4];
+
+	if (is_main)
+	{
+		char	   *pgport;
+
+		/*
+		 * Try to respect environment setting
+		 * or fallback to default
+		 */
+		pgport = getenv("PGPORT");
+		if (!pgport)
+			port_number = get_port_number(node);
+		else
+			port_number = atoi(pgport);
+	}
+	else
+	{
+		/* Get port number for node */
+		port_number = get_port_number(node);
+	}
+
+	/*
+	 * Check if there is a postmaster running already.
+	 */
+	snprintf(buf, sizeof(buf),
+			 "\"%s%spsql\" -p %d -X postgres <%s 2>%s",
+			 bindir ? bindir : "",
+			 bindir ? "/" : "",
+			 port_number, DEVNULL, DEVNULL);
+
+	for (i = 0; i < 16; i++)
+	{
+		if (system(buf) == 0)
+		{
+
+			if ((is_main && port_specified_by_user) ||
+				i == 15)
+			{
+				fprintf(stderr, _("port %d apparently in use\n"), port);
+				if (!port_specified_by_user)
+					fprintf(stderr, _("%s: could not determine an available port\n"), progname);
+				fprintf(stderr, _("Specify an unused port using the --port option or shut down any conflicting PostgreSQL servers.\n"));
+				exit(2);
+			}
+
+			fprintf(stderr, _("port %d apparently in use, trying %d\n"),
+					port_number, port_number + 1);
+
+			/*
+			 * If port is already in use, jump to a value that is not covered by
+			 * other nodes (Coordinator, Datanode, GTM and poolers)
+			 */
+			port_number += PORT_NUM_INTERVAL;
+
+			if (is_main)
+			{
+				char s[16];
+
+				sprintf(s, "%d", port_number);
+				doputenv("PGPORT", s);
+			}
+		}
+		else
+			break;
+	}
+
+	/* Save static value of port for node */
+	set_port_number(node, port_number);
+}
+
+/*
+ * Set PID number for given node
+ */
+static void
+set_node_pid(CDBNodeTypeNum node, PID_TYPE pid_number)
+{
+	switch (node)
+	{
+		case CDB_MASTER_1:
+			master1_pid = pid_number;
+			break;
+		case CDB_MASTER_2:
+			master2_pid = pid_number;
+			break;
+		case CDB_SEGMENT_1:
+			segment1_pid = pid_number;
+			break;
+		case CDB_SEGMENT_2:
+			segment2_pid = pid_number;
+			break;
+		case CDB_SEGMENT_3:
+			segment3_pid = pid_number;
+			break;
+		case CDB_SEGMENT_4:
+			segment4_pid = pid_number;
+			break;
+		case CDB_GTM:
+			gtm_pid = pid_number;
+			break;
+		case CDB_CATALOG_SERVICE:
+			catservice_pid = pid_number;
+			break;
+		default:
+			/* Should not happen */
+			break;
+	}
+}
+
+/*
+ * Get PID number for given node
+ */
+static PID_TYPE
+get_node_pid(CDBNodeTypeNum node)
+{
+	switch (node)
+	{
+		case CDB_MASTER_1:
+			return master1_pid;
+		case CDB_MASTER_2:
+			return master2_pid;
+		case CDB_SEGMENT_1:
+			return segment1_pid;
+		case CDB_SEGMENT_2:
+			return segment1_pid;
+		case CDB_SEGMENT_3:
+			return segment1_pid;
+		case CDB_SEGMENT_4:
+			return segment1_pid;
+		case CDB_GTM:
+			return gtm_pid;
+		case CDB_CATALOG_SERVICE:
+			return catservice_pid;
+		default:
+			/* Should not happen */
+			return -1;
+	}
+}
+
+
+/*
+ * Start given node
+ */
+static void
+start_node(CDBNodeTypeNum node, bool is_main)
+{
+	const char *data_folder = find_data_folder(node);
+	int			port_number = get_port_number(node);
+	PID_TYPE	node_pid;
+	char		buf[MAXPGPATH * 4];
+
+	if (node == CDB_GTM)
+	{
+		/* Case of a GTM start */
+		header(_("starting GTM process"));
+		snprintf(buf, sizeof(buf),
+				 "\"%s%sgtm\" -D \"%s/%s\" -p %d -x 10000 > \"%s/log/gtm.log\" 2>&1",
+				 bindir ? bindir : "",
+				 bindir ? "/" : "",
+				 temp_instance, data_folder, port_number,
+				 outputdir);
+	}
+	else
+	{
+		/* Case of normal nodes, start the node */
+		if (is_main)
+			snprintf(buf, sizeof(buf),
+					 "\"%s%spostgres\" -M %s -i -p %d -D \"%s/%s\"%s "
+					 "-c \"listen_addresses=%s\" -k \"%s\" "
+					 "> \"%s/log/postmaster_%d.log\" 2>&1",
+					 bindir ? bindir : "",
+					 bindir ? "/" : "",
+					 (char *)get_node_type(node),
+					 port_number,
+					 temp_instance, data_folder,
+					 debug ? " -d 5" : "",
+					 hostname ? hostname : "", sockdir ? sockdir : "",
+					 outputdir, node);
+		else
+			snprintf(buf, sizeof(buf),
+					 "\"%s%spostgres\" -M %s -i -p %d -D \"%s/%s\"%s "
+					 "-k \"%s\" "
+					 "> \"%s/log/postmaster_%d.log\" 2>&1",
+					 bindir ? bindir : "",
+					 bindir ? "/" : "",
+					 (char *)get_node_type(node),
+					 port_number,
+					 temp_instance, data_folder,
+					 debug ? " -d 5" : "",
+					 sockdir ? sockdir : "",
+					 outputdir, node);
+	}
+
+	/* Check process spawn */
+	node_pid = spawn_process(buf);
+	if (node_pid == INVALID_PID)
+	{
+		if (node == CDB_GTM)
+			fprintf(stderr, _("\n%s: could not spawn GTM: %s\n"),
+				progname, strerror(errno));
+		else
+			fprintf(stderr, _("\n%s: could not spawn postmaster: %s\n"),
+					progname, strerror(errno));
+		exit(2);
+	}
+
+	/* Wait a little for full start */
+	pg_usleep(1000000L);
+
+	/* Save static PID number */
+	set_node_pid(node,node_pid);
+}
+
+/*
+ * Initialize given node with initdb
+ */
+static void
+initdb_node(CDBNodeTypeNum node)
+{
+	const char *data_folder = find_data_folder(node);
+	char		buf[MAXPGPATH * 4];
+
+	{
+		snprintf(buf, sizeof(buf),
+				 "\"%s%sinitdb\" -M %s -D \"%s/%s\"  --noclean%s%s > \"%s/log/initdb.log\" 2>&1",
+				 bindir ? bindir : "",
+				 bindir ? "/" : "",
+				 (char *)get_node_type(node), temp_instance, data_folder, 
+				 debug ? " --debug" : "",
+				 nolocale ? " --no-locale" : "",
+				 outputdir);
+		if (system(buf))
+		{
+			fprintf(stderr, _("\n%s: initdb failed\nExamine %s/log/initdb.log for the reason.\nCommand was: %s\n"), progname, outputdir, buf);
+			exit(2);
+		}
+	}
+}
+
+
+static void
+set_node_config_file(CDBNodeTypeNum node)
+{
+	_stringlist *sl;
+	const char *data_folder = find_data_folder(node);
+	FILE	   *pg_conf;
+	char		buf[MAXPGPATH * 4];
+
+	snprintf(buf, sizeof(buf), "%s/%s/postgresql.conf", temp_instance, data_folder);
+	pg_conf = fopen(buf, "a");
+	if (pg_conf == NULL)
+	{
+		fprintf(stderr, _("\n%s: could not open \"%s\" for adding extra config: %s\n"), progname, buf, strerror(errno));
+		exit(2);
+	}
+	fputs("\n# Configuration added by pg_regress\n\n", pg_conf);
+
+	/*
+	 * Cluster uses 2PC for write transactions involving multiple nodes
+	 * This has to be set at least to a value corresponding to the maximum
+	 * number of tests run in parallel.
+	 */
+	fputs("max_prepared_transactions = 50\n", pg_conf);
+
+	/*
+	 * Set sequence_range to 1 for deterministic results
+	 */
+	fputs("sequence_range = 1\n", pg_conf);
+	fputs("log_line_prefix = \'\%t [\%p]:xid[\%x-\%v] remote=\%R,coord=\%C,global_session=\%S\'\n", pg_conf);
+
+	/* Set GTM connection information */
+	fputs("gtm_host = 'localhost'\n", pg_conf);
+	snprintf(buf, sizeof(buf), "gtm_port = %d\n", get_port_number(CDB_GTM));
+	fputs(buf, pg_conf);
+
+	for (sl = temp_configs; sl != NULL; sl = sl->next)
+	{
+		char	   *temp_config = sl->str;
+		FILE	   *extra_conf;
+		char		line_buf[1024];
+
+		extra_conf = fopen(temp_config, "r");
+		if (extra_conf == NULL)
+		{
+			fprintf(stderr, _("\n%s: could not open \"%s\" to read extra config: %s\n"), progname, temp_config, strerror(errno));
+			exit(2);
+		}
+		while (fgets(line_buf, sizeof(line_buf), extra_conf) != NULL)
+			fputs(line_buf, pg_conf);
+		fclose(extra_conf);
+	}
+
+	fclose(pg_conf);
+}
+
+/*
+ * Issue a command via psql, connecting to the specified database on wanted node
+ * Since we use system(), this doesn't return until the operation finishes
+ * This code is duplicated with psql_command but this way code impact is limited.
+ */
+static void
+psql_command_node(const char *database, CDBNodeTypeNum node, const char *query,...)
+{
+	char		query_formatted[1024];
+	char		query_escaped[2048];
+	char		psql_cmd[MAXPGPATH + 2048];
+	va_list		args;
+	char	   *s;
+	char	   *d;
+
+	/* Generate the query with insertion of sprintf arguments */
+	va_start(args, query);
+	vsnprintf(query_formatted, sizeof(query_formatted), query, args);
+	va_end(args);
+
+	/* Now escape any shell double-quote metacharacters */
+	d = query_escaped;
+	for (s = query_formatted; *s; s++)
+	{
+		if (strchr("\\\"$`", *s))
+			*d++ = '\\';
+		*d++ = *s;
+	}
+	*d = '\0';
+
+	/* And now we can build and execute the shell command */
+	snprintf(psql_cmd, sizeof(psql_cmd),
+			 "\"%s%spsql\" -X -p %d -c \"%s\" \"%s\"",
+			 bindir ? bindir : "",
+			 bindir ? "/" : "",
+			 get_port_number(node),
+			 query_escaped,
+			 database);
+
+	if (system(psql_cmd) != 0)
+	{
+		/* psql probably already reported the error */
+		fprintf(stderr, _("command failed: %s\n"), psql_cmd);
+		exit(2);
+	}
+}
+
+/*
+ * Setup connection information to remote nodes for Coordinator running regression
+ */
+static void
+setup_connection_information(void)
+{
+	header(_("setting connection information"));
+}
+
+
+/*
+ * Check if node is already running
+ */
+static bool
+check_node_running(CDBNodeTypeNum node)
+{
+	char		buf[MAXPGPATH * 4];
+
+	snprintf(buf, sizeof(buf),
+			 "\"%s%spsql\" -p %d -X postgres <%s 2>%s",
+			 bindir ? bindir : "",
+			 bindir ? "/" : "",
+			 get_port_number(node), DEVNULL, "/tmp/makecheck.log");
+	return system(buf) == 0;
+}
+
+
+/*
+ * Check if given node has failed during startup
+ */
+static void
+check_node_fail(CDBNodeTypeNum node)
+{
+	PID_TYPE	pid_number = get_node_pid(node);
+
+#ifndef WIN32
+	if (kill(pid_number, 0) != 0)
+#else
+	if (WaitForSingleObject(pid_number, 0) == WAIT_OBJECT_0)
+#endif /* WIN32 */
+	{
+		fprintf(stderr, _("\n%s: postmaster failed\nExamine %s/log/postmaster_%d.log for the reason\n"), progname, outputdir, node);
+		exit(2);
+	}
+}
+
+/*
+ * Kill given node but do not exit
+ */
+static void
+kill_node(CDBNodeTypeNum node)
+{
+	PID_TYPE pid_number = get_node_pid(node);
+
+	fprintf(stderr, _("\n%s: postmaster did not respond within 60 seconds\nExamine %s/log/postmaster_%d.log for the reason\n"), progname, outputdir, node);
+
+#ifndef WIN32
+	if (kill(pid_number, SIGKILL) != 0 &&
+		errno != ESRCH)
+		fprintf(stderr, _("\n%s: could not kill failed postmaster: %s\n"),
+				progname, strerror(errno));
+#else
+	if (TerminateProcess(pid_number, 255) == 0)
+		fprintf(stderr, _("\n%s: could not kill failed postmaster: %lu\n"),
+				progname, GetLastError());
+#endif
+}
+#endif
 
 #ifdef HAVE_UNIX_SOCKETS
 /*
@@ -709,9 +1401,15 @@ get_expectfile(const char *testname, const char *file)
 static void
 doputenv(const char *var, const char *val)
 {
+#ifdef CDB
+	char	   *s = malloc(strlen(var) + strlen(val) + 2);
+
+	sprintf(s, "%s=%s", var, val);
+#else
 	char	   *s;
 
 	s = psprintf("%s=%s", var, val);
+#endif
 	putenv(s);
 }
 
@@ -2167,6 +2865,17 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		 */
 		port = 0xC000 | (PG_VERSION_NUM & 0x3FFF);
 
+#ifdef CDB
+	/* Initialize the other port numbers, user has no control on them */
+	port_master2 = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 1;
+	port_segment1 = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 2;
+	port_segment2 = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 3;
+	port_segment3 = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 4;
+	port_segment4 = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 5;
+	port_gtm = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 6;
+	port_catlog_service = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 7;
+#endif
+
 	inputdir = make_absolute_path(inputdir);
 	outputdir = make_absolute_path(outputdir);
 	dlpath = make_absolute_path(dlpath);
@@ -2215,6 +2924,17 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 
 		/* initdb */
 		header(_("initializing database system"));
+#ifdef CDB
+		/* Initialize nodes and GTM */
+		initdb_node(CDB_GTM);
+		initdb_node(CDB_CATALOG_SERVICE);
+		initdb_node(CDB_MASTER_1);
+		initdb_node(CDB_MASTER_2);
+		initdb_node(CDB_SEGMENT_1);
+		initdb_node(CDB_SEGMENT_2);
+		initdb_node(CDB_SEGMENT_3);
+		initdb_node(CDB_SEGMENT_4);
+#else
 		snprintf(buf, sizeof(buf),
 				 "\"%s%sinitdb\" -D \"%s/data\" --noclean --nosync%s%s > \"%s/log/initdb.log\" 2>&1",
 				 bindir ? bindir : "",
@@ -2228,6 +2948,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 			fprintf(stderr, _("\n%s: initdb failed\nExamine %s/log/initdb.log for the reason.\nCommand was: %s\n"), progname, outputdir, buf);
 			exit(2);
 		}
+#endif /* CDB */
 
 		/*
 		 * Adjust the default postgresql.conf for regression testing. The user
@@ -2237,6 +2958,19 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		 * failures, don't set max_prepared_transactions any higher than
 		 * actually needed by the prepared_xacts regression test.)
 		 */
+#ifdef CDB
+		/*
+		 * Update configuration file of each node with user-defined options
+		 * and 2PC related information.
+		 * PGXCTODO: calculate port of GTM before setting configuration files
+		 */
+		set_node_config_file(CDB_MASTER_1);
+		set_node_config_file(CDB_MASTER_2);
+		set_node_config_file(CDB_SEGMENT_1);
+		set_node_config_file(CDB_SEGMENT_2);
+		set_node_config_file(CDB_SEGMENT_3);
+		set_node_config_file(CDB_SEGMENT_4);
+#else
 		snprintf(buf, sizeof(buf), "%s/data/postgresql.conf", temp_instance);
 		pg_conf = fopen(buf, "a");
 		if (pg_conf == NULL)
@@ -2269,6 +3003,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		}
 
 		fclose(pg_conf);
+#endif /* CDB */
 
 #ifdef ENABLE_SSPI
 
@@ -2282,6 +3017,17 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 #error Platform has no means to secure the test installation.
 #endif
 
+#ifdef CDB
+		/* Determine port numbers for nodes */
+		calculate_node_port(CDB_MASTER_1, true);
+		calculate_node_port(CDB_MASTER_2, false);
+		calculate_node_port(CDB_SEGMENT_1, false);
+		calculate_node_port(CDB_SEGMENT_2, false);
+		calculate_node_port(CDB_SEGMENT_3, false);
+		calculate_node_port(CDB_SEGMENT_4, false);
+		calculate_node_port(CDB_GTM, false);
+		calculate_node_port(CDB_CATALOG_SERVICE, false);
+#else
 		/*
 		 * Check if there is a postmaster running already.
 		 */
@@ -2314,11 +3060,25 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 			else
 				break;
 		}
+#endif /* CDB */
 
 		/*
 		 * Start the temp postmaster
 		 */
 		header(_("starting postmaster"));
+#ifdef CDB
+		/* Start GTM & catalog service*/
+		start_node(CDB_CATALOG_SERVICE, false);
+		start_node(CDB_GTM, false);
+
+		/* Start all the nodes */
+		start_node(CDB_MASTER_1, true);
+		start_node(CDB_MASTER_2, false);
+		start_node(CDB_SEGMENT_1, false);
+		start_node(CDB_SEGMENT_2, false);
+		start_node(CDB_SEGMENT_3, false);
+		start_node(CDB_SEGMENT_4, false);
+#else		
 		snprintf(buf, sizeof(buf),
 				 "\"%s%spostgres\" -D \"%s/data\" -F%s "
 				 "-c \"listen_addresses=%s\" -k \"%s\" "
@@ -2335,6 +3095,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 					progname, strerror(errno));
 			exit(2);
 		}
+#endif /* CDB */
 
 		/*
 		 * Wait till postmaster is able to accept connections; normally this
@@ -2355,6 +3116,28 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 
 		for (i = 0; i < wait_seconds; i++)
 		{
+#ifdef CDB
+			/* Done if psql succeeds for each node */
+			if (check_node_running(CDB_CATALOG_SERVICE) &&
+				check_node_running(CDB_GTM) &&
+				check_node_running(CDB_MASTER_1) &&
+				check_node_running(CDB_MASTER_2) &&
+				check_node_running(CDB_SEGMENT_1) &&
+				check_node_running(CDB_SEGMENT_2) &&
+				check_node_running(CDB_SEGMENT_3) &&
+				check_node_running(CDB_SEGMENT_4))
+				break;
+
+			/* Check node failure */
+			check_node_fail(CDB_CATALOG_SERVICE);
+			check_node_fail(CDB_GTM);
+			check_node_fail(CDB_MASTER_1);
+			check_node_fail(CDB_MASTER_2);
+			check_node_fail(CDB_SEGMENT_1);
+			check_node_fail(CDB_SEGMENT_2);
+			check_node_fail(CDB_SEGMENT_3);
+			check_node_fail(CDB_SEGMENT_4);
+#else			
 			/* Done if psql succeeds */
 			if (system(buf2) == 0)
 				break;
@@ -2371,11 +3154,22 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 				fprintf(stderr, _("\n%s: postmaster failed\nExamine %s/log/postmaster.log for the reason\n"), progname, outputdir);
 				exit(2);
 			}
-
+#endif /* CDB */
 			pg_usleep(1000000L);
 		}
 		if (i >= wait_seconds)
 		{
+#ifdef CDB
+			/* If one node fails, all fail */
+			kill_node(CDB_CATALOG_SERVICE);
+			kill_node(CDB_GTM);
+			kill_node(CDB_MASTER_1);
+			kill_node(CDB_MASTER_2);
+			kill_node(CDB_SEGMENT_1);
+			kill_node(CDB_SEGMENT_2);
+			kill_node(CDB_SEGMENT_3);
+			kill_node(CDB_SEGMENT_4);
+#else
 			fprintf(stderr, _("\n%s: postmaster did not respond within %d seconds\nExamine %s/log/postmaster.log for the reason\n"),
 					progname, wait_seconds, outputdir);
 
@@ -2395,6 +3189,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 				fprintf(stderr, _("\n%s: could not kill failed postmaster: error code %lu\n"),
 						progname, GetLastError());
 #endif
+#endif /* CDB */
 
 			exit(2);
 		}
@@ -2407,8 +3202,32 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 #else
 #define ULONGPID(x) (unsigned long) (x)
 #endif
+
+#ifdef CDB
+		/* Print info for each node */
+		printf(_("running on port %d with PID %lu for master 1\n"),
+			   get_port_number(CDB_MASTER_1), ULONGPID(get_node_pid(CDB_MASTER_1)));
+		printf(_("running on port %d with PID %lu for master 2\n"),
+			   get_port_number(CDB_MASTER_2), ULONGPID(get_node_pid(CDB_MASTER_2)));
+		printf(_("running on port %d with PID %lu for segment 1\n"),
+			   get_port_number(CDB_SEGMENT_1), ULONGPID(get_node_pid(CDB_SEGMENT_1)));
+		printf(_("running on port %d with PID %lu for segment 2\n"),
+			   get_port_number(CDB_SEGMENT_2), ULONGPID(get_node_pid(CDB_SEGMENT_2)));
+		printf(_("running on port %d with PID %lu for segment 3\n"),
+			   get_port_number(CDB_SEGMENT_3), ULONGPID(get_node_pid(CDB_SEGMENT_3)));
+		printf(_("running on port %d with PID %lu for segment 4\n"),
+			   get_port_number(CDB_SEGMENT_4), ULONGPID(get_node_pid(CDB_SEGMENT_4)));
+		printf(_("running on port %d with PID %lu for GTM\n"),
+			   get_port_number(CDB_GTM), ULONGPID(get_node_pid(CDB_GTM)));
+		printf(_("running on port %d with PID %lu for catalog service\n"),
+			   get_port_number(CDB_CATALOG_SERVICE), ULONGPID(get_node_pid(CDB_CATALOG_SERVICE)));
+
+		/* Postmaster is finally running, so set up connection information on Coordinators */
+		setup_connection_information();
+#else
 		printf(_("running on port %d with PID %lu\n"),
 			   port, ULONGPID(postmaster_pid));
+#endif
 	}
 	else
 	{
