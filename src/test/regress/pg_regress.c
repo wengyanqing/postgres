@@ -276,7 +276,11 @@ split_to_stringlist(const char *s, const char *delim, _stringlist **listhead)
 static void
 header(const char *fmt,...)
 {
+#ifdef CDB
+	char		tmp[1024];
+#else
 	char		tmp[64];
+#endif // CDB
 	va_list		ap;
 
 	va_start(ap, fmt);
@@ -423,9 +427,11 @@ stop_node(CDBNodeTypeNum node)
 			 bindir ? bindir : "",
 			 bindir ? "/" : "",
 			 temp_instance, data_folder);
+	
 	r = system(buf);
 	if (r != 0)
 	{
+		header(_("Run command error: %s"),buf);		 	
 		fprintf(stderr, _("\n%s: could not stop node %d: exit code was %d\n"),
 				progname, node, r);
 		exit(2);
@@ -740,11 +746,13 @@ start_node(CDBNodeTypeNum node, bool is_main)
 					debug ? " -d 5" : "",
 					sockdir ? sockdir : "",
 					outputdir, node);
-
+	
 	/* Check process spawn */
 	node_pid = spawn_process(buf);
 	if (node_pid == INVALID_PID)
 	{
+		header(_("Run command error: %s"),buf);
+
 		if (node == CDB_GTM)
 			fprintf(stderr, _("\n%s: could not spawn GTM: %s\n"),
 				progname, strerror(errno));
@@ -913,7 +921,12 @@ check_node_running(CDBNodeTypeNum node)
 			 bindir ? bindir : "",
 			 bindir ? "/" : "",
 			 get_port_number(node), DEVNULL, "/tmp/makecheck.log");
-	return system(buf) == 0;
+
+	if(system(buf) != 0){
+		header(_("Run command error: %s"),buf);		 
+		return false;
+	}
+	return true;
 }
 
 
@@ -2952,12 +2965,13 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		 * and 2PC related information.
 		 * PGXCTODO: calculate port of GTM before setting configuration files
 		 */
+		 /*
 		set_node_config_file(CDB_MASTER_1);
 		set_node_config_file(CDB_MASTER_2);
 		set_node_config_file(CDB_SEGMENT_1);
 		set_node_config_file(CDB_SEGMENT_2);
 		set_node_config_file(CDB_SEGMENT_3);
-		set_node_config_file(CDB_SEGMENT_4);
+		set_node_config_file(CDB_SEGMENT_4);*/
 #else
 		snprintf(buf, sizeof(buf), "%s/data/postgresql.conf", temp_instance);
 		pg_conf = fopen(buf, "a");

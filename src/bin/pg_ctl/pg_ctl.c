@@ -2221,12 +2221,11 @@ main(int argc, char **argv)
 	while (optind < argc)
 	{
 #ifdef CDB
-		while ((c = getopt_long(argc, argv, "cD:e:l:mM:N:o:p:P:sS:t:U:wW:Z:-", long_options, &option_index)) != -1)
+		while ((c = getopt_long(argc, argv, "cD:e:l:m:M:N:o:p:P:sS:t:U:wWZ:", long_options, &option_index)) != -1)
 #else
 		while ((c = getopt_long(argc, argv, "cD:e:l:m:N:o:p:P:sS:t:U:wW", long_options, &option_index)) != -1)
 #endif
 		{
-			printf("%s\n", optarg);
 			switch (c)
 			{
 				case 'D':
