@@ -713,47 +713,33 @@ start_node(CDBNodeTypeNum node, bool is_main)
 	PID_TYPE	node_pid;
 	char		buf[MAXPGPATH * 4];
 
-	if (node == CDB_GTM)
-	{
-		/* Case of a GTM start */
-		header(_("starting GTM process"));
+	/* Case of normal nodes, start the node */
+	if (is_main)
 		snprintf(buf, sizeof(buf),
-				 "\"%s%sgtm\" -D \"%s/%s\" -p %d -x 10000 > \"%s/log/gtm.log\" 2>&1",
-				 bindir ? bindir : "",
-				 bindir ? "/" : "",
-				 temp_instance, data_folder, port_number,
-				 outputdir);
-	}
+					"\"%s%spostgres\" -M %s -i -p %d -D \"%s/%s\"%s "
+					"-c \"listen_addresses=%s\" -k \"%s\" "
+					"> \"%s/log/postmaster_%d.log\" 2>&1",
+					bindir ? bindir : "",
+					bindir ? "/" : "",
+					(char *)get_node_type(node),
+					port_number,
+					temp_instance, data_folder,
+					debug ? " -d 5" : "",
+					hostname ? hostname : "", sockdir ? sockdir : "",
+					outputdir, node);
 	else
-	{
-		/* Case of normal nodes, start the node */
-		if (is_main)
-			snprintf(buf, sizeof(buf),
-					 "\"%s%spostgres\" -M %s -i -p %d -D \"%s/%s\"%s "
-					 "-c \"listen_addresses=%s\" -k \"%s\" "
-					 "> \"%s/log/postmaster_%d.log\" 2>&1",
-					 bindir ? bindir : "",
-					 bindir ? "/" : "",
-					 (char *)get_node_type(node),
-					 port_number,
-					 temp_instance, data_folder,
-					 debug ? " -d 5" : "",
-					 hostname ? hostname : "", sockdir ? sockdir : "",
-					 outputdir, node);
-		else
-			snprintf(buf, sizeof(buf),
-					 "\"%s%spostgres\" -M %s -i -p %d -D \"%s/%s\"%s "
-					 "-k \"%s\" "
-					 "> \"%s/log/postmaster_%d.log\" 2>&1",
-					 bindir ? bindir : "",
-					 bindir ? "/" : "",
-					 (char *)get_node_type(node),
-					 port_number,
-					 temp_instance, data_folder,
-					 debug ? " -d 5" : "",
-					 sockdir ? sockdir : "",
-					 outputdir, node);
-	}
+		snprintf(buf, sizeof(buf),
+					"\"%s%spostgres\" -M %s -i -p %d -D \"%s/%s\"%s "
+					"-k \"%s\" "
+					"> \"%s/log/postmaster_%d.log\" 2>&1",
+					bindir ? bindir : "",
+					bindir ? "/" : "",
+					(char *)get_node_type(node),
+					port_number,
+					temp_instance, data_folder,
+					debug ? " -d 5" : "",
+					sockdir ? sockdir : "",
+					outputdir, node);
 
 	/* Check process spawn */
 	node_pid = spawn_process(buf);
@@ -2866,6 +2852,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		port = 0xC000 | (PG_VERSION_NUM & 0x3FFF);
 
 #ifdef CDB
+	buf2[0]='\0'; //not to report warning: unused variable
 	/* Initialize the other port numbers, user has no control on them */
 	port_master2 = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 1;
 	port_segment1 = (0xC000 | (PG_VERSION_NUM & 0x3FFF)) + 2;
@@ -2925,6 +2912,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		/* initdb */
 		header(_("initializing database system"));
 #ifdef CDB
+		pg_conf = NULL;  //not to report warning: unused variable
 		/* Initialize nodes and GTM */
 		initdb_node(CDB_GTM);
 		initdb_node(CDB_CATALOG_SERVICE);

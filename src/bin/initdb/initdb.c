@@ -176,6 +176,7 @@ static int	n_buffers = 50;
 static char *dynamic_shared_memory_type = NULL;
 
 #ifdef CDB
+static char *node_type;
 static char *cdb_init_file;
 
 static char *backend_output = DEVNULL;
@@ -3561,8 +3562,11 @@ main(int argc, char *argv[])
 	}
 
 	/* process command-line options */
-
+#ifdef CDB
+	while ((c = getopt_long(argc, argv, "dD:E:kL:M:nNU:WA:sST:X:", long_options, &option_index)) != -1)
+#else
 	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:", long_options, &option_index)) != -1)
+#endif	
 	{
 #ifdef CDB
 		const char *optname;
@@ -3674,6 +3678,9 @@ main(int argc, char *argv[])
 				xlog_dir = pg_strdup(optarg);
 				break;
 #ifdef CDB
+			case 'M':
+				node_type = pg_strdup(optarg);
+				break;
 			case 1001:
 				n_connections = parse_long(optarg, false, optname);
 				break;
@@ -3801,30 +3808,16 @@ main(int argc, char *argv[])
 	strlcpy(bin_dir, argv[0], sizeof(bin_dir));
 	get_parent_directory(bin_dir);
 
-#ifdef CDB
-	printf(_("\nSuccess.\n"));
-	printf(_("You can now start the database server of the master using:\n\n"
-				"    %s%s%spostgres%s -M master -D %s%s%s\n"
-				"or\n"
-				"    %s%s%spg_ctl%s start -D %s%s%s -M master -l logfile\n\n"
-				" You can now start the database server of the segment using:\n\n"
-				"    %s%s%spostgres%s -M segment -D %s%s%s\n"
-				"or \n"
-				"    %s%s%spg_ctl%s start -D %s%s%s -M segment -l logfile\n\n"),
-			QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
-			QUOTE_PATH, pgdata_native, QUOTE_PATH,
-			QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
-			QUOTE_PATH, pgdata_native, QUOTE_PATH,
-			QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
-			QUOTE_PATH, pgdata_native, QUOTE_PATH,
-			QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
-			QUOTE_PATH, pgdata_native, QUOTE_PATH);
-#else
 	printf(_("\nSuccess. You can now start the database server using:\n\n"
+#ifdef CDB	
+			 "    %s%s%spg_ctl%s -M %s -D %s%s%s -l logfile start\n\n"),
+	   QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH, node_type,
+#else	   
 			 "    %s%s%spg_ctl%s -D %s%s%s -l logfile start\n\n"),
 	   QUOTE_PATH, bin_dir, (strlen(bin_dir) > 0) ? DIR_SEP : "", QUOTE_PATH,
-		   QUOTE_PATH, pgdata_native, QUOTE_PATH);
 #endif
+		   QUOTE_PATH, pgdata_native, QUOTE_PATH);
+
 
 	return 0;
 }
