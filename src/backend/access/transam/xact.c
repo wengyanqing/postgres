@@ -739,6 +739,18 @@ SetCurrentStatementStartTimestamp(void)
 	stmtStartTimestamp = GetCurrentTimestamp();
 }
 
+#ifdef CDB
+/*
+ *  SetCurrentStatementStartTimestampToMaster
+ */
+void
+SetCurrentStatementStartTimestampToMaster(TimestampTz masterTime)
+{
+	if (masterTime != 0)
+		stmtStartTimestamp = masterTime;
+}
+#endif
+
 /*
  *	SetCurrentTransactionStopTimestamp
  */

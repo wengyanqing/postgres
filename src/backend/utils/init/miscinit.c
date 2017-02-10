@@ -319,8 +319,11 @@ GetSessionUserId(void)
 	return SessionUserId;
 }
 
-
+#ifdef CDB
+extern void
+#else
 static void
+#endif
 SetSessionUserId(Oid userid, bool is_superuser)
 {
 	AssertState(SecurityRestrictionContext == 0);

@@ -322,6 +322,9 @@ extern TimestampTz GetCurrentTransactionStartTimestamp(void);
 extern TimestampTz GetCurrentStatementStartTimestamp(void);
 extern TimestampTz GetCurrentTransactionStopTimestamp(void);
 extern void SetCurrentStatementStartTimestamp(void);
+#ifdef CDB
+extern void SetCurrentStatementStartTimestampToMaster(TimestampTz masterTime);
+#endif
 extern int	GetCurrentTransactionNestLevel(void);
 extern bool TransactionIdIsCurrentTransactionId(TransactionId xid);
 extern void CommandCounterIncrement(void);

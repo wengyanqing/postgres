@@ -75,6 +75,9 @@
 #include "utils/timestamp.h"
 #include "mb/pg_wchar.h"
 
+#ifdef CDB
+#include "cdb/cdbvars.h"
+#endif
 
 /* ----------------
  *		global variables
@@ -164,6 +167,41 @@ static bool UseSemiNewlineNewline = false;		/* -j switch */
 static bool RecoveryConflictPending = false;
 static bool RecoveryConflictRetryable = true;
 static ProcSignalReason RecoveryConflictReason;
+
+#ifdef CDB
+typedef struct CdbMppMsgItem
+{
+	int 		len;
+	const char 	*msg;
+} CdbMppMsgItem;
+
+typedef struct CdbMppMsg
+{
+	int				commandId;
+	Oid				sessionUserid;
+	Oid				outerUserid;
+	Oid				currentUserid;	
+	bool    		suidIsSuper;	
+	bool    		ouidIsSuper;
+	int				localSliceId;
+	int				rootIdx;
+	int				primaryGangId;
+	TimestampTz 	statementStart;
+	int 			unusedFlags;	
+	
+	CdbMppMsgItem	queryString;
+	CdbMppMsgItem	serializedQuerytree;
+	CdbMppMsgItem	serializedPlantree;
+	CdbMppMsgItem	serializedParams;
+	CdbMppMsgItem	serializedSliceInfo;
+	CdbMppMsgItem	serializedSnapshot;
+	CdbMppMsgItem	serializedIdentity;
+	CdbMppMsgItem	serializedResource;
+	
+	CdbMppMsgItem	seqServerHost;
+	int 			seqServerPort;
+} CdbMppMsg;
+#endif
 
 /* ----------------------------------------------------------------
  *		decls for routines only used in this file
@@ -863,6 +901,122 @@ pg_plan_queries(List *querytrees, int cursorOptions, ParamListInfo boundParams)
 	return stmt_list;
 }
 
+
+#ifdef CDB
+/*
+ * prepare_mpp_query 
+ *
+ */
+static void
+init_mpp_msg_item(CdbMppMsgItem *item)
+{
+	item->len = 0;
+	item->msg = NULL;	
+}
+
+static CdbMppMsg
+prepare_mpp_query(StringInfo input_message)
+{
+	CdbMppMsg	mpp_msg;
+	mpp_msg.suidIsSuper = false;
+	mpp_msg.ouidIsSuper = false;
+	init_mpp_msg_item(&mpp_msg.queryString);		
+	init_mpp_msg_item(&mpp_msg.serializedQuerytree);		
+	init_mpp_msg_item(&mpp_msg.serializedPlantree);		
+	init_mpp_msg_item(&mpp_msg.serializedParams);		
+	init_mpp_msg_item(&mpp_msg.serializedSliceInfo);		
+	init_mpp_msg_item(&mpp_msg.serializedSnapshot);		
+	init_mpp_msg_item(&mpp_msg.serializedIdentity);		
+	init_mpp_msg_item(&mpp_msg.serializedResource);		
+	init_mpp_msg_item(&mpp_msg.seqServerHost);		
+	mpp_msg.queryString.msg = pstrdup("");
+
+	mpp_msg.commandId = pq_getmsgint(input_message, 4);
+	mpp_msg.sessionUserid = pq_getmsgint(input_message, 4);
+	if(pq_getmsgbyte(input_message) == 1)
+	{
+		mpp_msg.suidIsSuper = true;
+	}
+	mpp_msg.outerUserid = pq_getmsgint(input_message, 4);
+	if(pq_getmsgbyte(input_message) == 1)
+	{
+		mpp_msg.ouidIsSuper = true;
+	}	
+	mpp_msg.currentUserid = pq_getmsgint(input_message, 4);
+
+	mpp_msg.localSliceId = pq_getmsgint(input_message, 4);
+	mpp_msg.rootIdx = pq_getmsgint(input_message, 4);
+	mpp_msg.primaryGangId = pq_getmsgint(input_message, 4);
+	mpp_msg.statementStart = pq_getmsgint64(input_message);
+
+	/* read ser string lengths */
+	mpp_msg.queryString.len = pq_getmsgint(input_message, 4);
+	mpp_msg.serializedQuerytree.len = pq_getmsgint(input_message, 4);
+	mpp_msg.serializedPlantree.len = pq_getmsgint(input_message, 4);
+	mpp_msg.serializedParams.len = pq_getmsgint(input_message, 4);
+	mpp_msg.serializedSliceInfo.len = pq_getmsgint(input_message, 4);
+	mpp_msg.serializedSnapshot.len = pq_getmsgint(input_message, 4);
+	mpp_msg.serializedIdentity.len = pq_getmsgint(input_message, 4);
+	mpp_msg.serializedResource.len = pq_getmsgint(input_message, 4);
+
+	/* read in the snapshot info */
+	if (mpp_msg.serializedSnapshot.len > 0) 
+	{
+		mpp_msg.serializedSnapshot.msg = pq_getmsgbytes(input_message, mpp_msg.serializedSnapshot.len);
+	}
+
+	/* get the transaction options */
+	mpp_msg.unusedFlags = pq_getmsgint(input_message, 4); 	
+
+	/* get sequence server address */
+	mpp_msg.seqServerHost.len = pq_getmsgint(input_message, 4);
+	mpp_msg.seqServerPort = pq_getmsgint(input_message, 4);
+
+	if (mpp_msg.queryString.len > 0)
+	{
+		mpp_msg.queryString.msg = pq_getmsgbytes(input_message, mpp_msg.queryString.len);
+	}
+
+	if (mpp_msg.serializedQuerytree.len > 0)
+	{
+		mpp_msg.serializedQuerytree.msg = pq_getmsgbytes(input_message, mpp_msg.serializedQuerytree.len);
+	}
+
+	if (mpp_msg.serializedPlantree.len > 0)
+	{
+		mpp_msg.serializedPlantree.msg = pq_getmsgbytes(input_message, mpp_msg.serializedPlantree.len);
+	}
+
+	if (mpp_msg.serializedParams.len > 0)
+	{
+		mpp_msg.serializedParams.msg = pq_getmsgbytes(input_message, mpp_msg.serializedParams.len);
+	}
+
+	if (mpp_msg.serializedSliceInfo.len > 0)
+	{
+		mpp_msg.serializedSliceInfo.msg = pq_getmsgbytes(input_message, mpp_msg.serializedSliceInfo.len);
+	}
+
+	if (mpp_msg.serializedIdentity.len > 0)
+	{
+		mpp_msg.serializedIdentity.msg = pq_getmsgbytes(input_message, mpp_msg.serializedIdentity.len);
+	}
+
+	if (mpp_msg.serializedResource.len > 0)
+	{
+		mpp_msg.serializedResource.msg = pq_getmsgbytes(input_message, mpp_msg.serializedResource.len);
+	}
+
+	if (mpp_msg.seqServerHost.len > 0)
+	{
+		mpp_msg.seqServerHost.msg = pq_getmsgbytes(input_message, mpp_msg.seqServerHost.len);
+	}	
+
+	pq_getmsgend(input_message);
+
+	return mpp_msg;	
+}
+#endif
 
 /*
  * exec_simple_query
@@ -4092,7 +4246,67 @@ PostgresMain(int argc, char *argv[],
 					send_ready_for_query = true;
 				}
 				break;
+#ifdef CDB
+			case 'M':			/* MPP dispatched stmt from QD */
+				{
+					/* Set statement_timestamp() */
+					SetCurrentStatementStartTimestamp();
+					
+					CdbMppMsg mpp_msg = prepare_mpp_query(&input_message);					
+		
+					const char *query_string = mpp_msg.queryString.msg;
+			
+					/* get the client command serial# */
+					gp_command_count = mpp_msg.commandId;
+			
+					SetCurrentStatementStartTimestampToMaster(mpp_msg.statementStart);
+	
+					if (mpp_msg.sessionUserid > 0)
+					{
+						SetSessionUserId(mpp_msg.sessionUserid, mpp_msg.suidIsSuper);  /* Set the session UserId */
+					}
+					
+					if (mpp_msg.outerUserid > 0 && mpp_msg.outerUserid!= GetSessionUserId())
+					{
+						SetCurrentRoleId(mpp_msg.outerUserid, mpp_msg.ouidIsSuper);		/* Set the outer UserId */
+					}	
+						
+					if (mpp_msg.currentUserid > 0)
+					{
+						SetUserIdAndContext(mpp_msg.currentUserid, false); 				/* Set current userid */
+					}
 
+					if (mpp_msg.serializedIdentity.len > 0)
+					{
+						char *completeSerializedIdentity = (char *) palloc((mpp_msg.serializedIdentity.len + 1) * sizeof(char));
+						memcpy(completeSerializedIdentity, mpp_msg.serializedIdentity.msg, mpp_msg.serializedIdentity.len);
+						completeSerializedIdentity[mpp_msg.serializedIdentity.len] = '\0';
+						SetupProcessIdentity((const char*)completeSerializedIdentity);
+						pfree(completeSerializedIdentity);
+					}
+
+					if (mpp_msg.serializedQuerytree.len == 0 && mpp_msg.serializedPlantree.len == 0)
+					{
+						if (strncmp(query_string, "BEGIN", 5) == 0)
+						{
+							CommandDest dest = whereToSendOutput;
+							pgstat_report_activity(STATE_RUNNING, "BEGIN");
+							set_ps_display("BEGIN", false);
+							BeginCommand("BEGIN", dest);
+							EndCommand("BEGIN", dest);	
+						}
+					}
+					else
+					{
+						// TODO exec_mpp_query
+					}
+
+					SetUserIdAndContext(GetOuterUserId(), false);
+
+					send_ready_for_query = true;
+				}		
+				break;
+#endif
 			case 'P':			/* parse */
 				{
 					const char *stmt_name;

@@ -31,7 +31,7 @@ override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 
 #SUBDIRS := motion
 
-OBJS = identity.o 
+OBJS = identity.o cdbvars.o 
 
 ifeq ($(PORTNAME),cygwin)
 .LIBPATTERNS := $(filter-out %.so,$(.LIBPATTERNS))
