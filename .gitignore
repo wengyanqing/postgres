@@ -40,3 +40,9 @@ lib*.pc
 /Debug/
 /Release/
 /tmp_install/
+
+GTAGS
+GRTAGS
+GPATH
+tags
+.gitignore
